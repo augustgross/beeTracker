@@ -8,7 +8,7 @@ Tracks bee movement in a behavioral box using a fine-tuned YOLO11n model with Bo
 2. **BoT-SORT** assigns consistent IDs to each bee across frames, handling occlusion and overlap
 3. **Telemetry engine** calculates speed, idle time, and position from tracked coordinates
 
-This replaces the previous OpenCV threshold-based detection, which struggled with bees near edges, near the center food blob, and when two bees overlapped. The YOLO model learns what a bee looks like rather than relying on pixel intensity, so it works reliably across lighting conditions and positions.
+This replaces the previous OpenCV threshold-based detection, which struggled with bees near edges, near the center food blob, and when bees overlapped. The YOLO model learns what a bee looks like rather than relying on pixel intensity, so it works reliably across lighting conditions and positions.
 
 ## Outputs
 
@@ -35,6 +35,12 @@ Place your video and trained model in the project directory, then:
 
 ```bash
 make run
+```
+
+or for live tracking from a camera feed:
+
+```bash
+make run-live
 ```
 
 To clean up generated files and the virtual environment:

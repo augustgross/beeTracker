@@ -9,16 +9,26 @@ endif
 
 .PHONY: setup run clean
 
+help:
+	@echo "Available targets:"
+	@echo "  setup - Set up the virtual environment and install dependencies"
+	@echo "  run   - Run the bee tracker script"
+	@echo "  run-live - Run the live bee tracker using the camera feed"
+	@echo "  clean - Remove the virtual environment and generated files"
+
 setup: $(VENV)/installed
 
 $(VENV)/installed:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip
-	$(PIP) install ultralytics opencv-python pandas scipy matplotlib openpyxl
+	$(PIP) install -r requirements.txt
 	touch $(VENV)/installed
 
 run: setup
 	$(PYTHON) tracker.py
+
+run-live: 
+	$(PYTHON) live_tracker.py --camera 0
 
 clean:
 	rm -rf $(VENV)

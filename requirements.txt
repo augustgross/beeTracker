@@ -1,0 +1,8 @@
+ultralytics
+opencv-python
+pandas
+matplotlib
+openpyxl
+scipy
+supabase
+python-dotenv
