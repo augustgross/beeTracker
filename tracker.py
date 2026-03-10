@@ -3,21 +3,30 @@ Bee Tracking and Telemetry Extraction
 =======================================
 Uses YOLO11n for detection and BoT-SORT for consistent bee ID tracking.
 
-Outputs (in output/ directory):
-  1. bee_telemetry.csv           — per-frame positions and speed
-  2. bee_summary_statistics.xlsx  — per-bee avg/max speed, idle time
-  3. tracked_video.mp4            — annotated video with boxes, IDs, and trails
-  4. speed_plot.png               — speed over time for all bees
+Outputs:
+  1. Supabase → bee_frame_observation table (per-frame positions and speed)
+  2. Supabase → bees table (one row per unique bee ID)
+  3. output/bee_summary_statistics.xlsx  — per-bee avg/max speed, idle time
+  4. output/tracked_video.mp4            — annotated video with boxes, IDs, and trails
+  5. output/speed_plot.png               — speed over time for all bees
+
+Supabase setup:
+  Create a .env file in the same directory with:
+    SUPABASE_URL=https://your-project.supabase.co
+    SUPABASE_KEY=your-anon-or-service-role-key
 """
 
 import cv2
 import numpy as np
 import pandas as pd
+import os
 from ultralytics import YOLO
 import matplotlib.pyplot as plt
 from pathlib import Path
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
-# Settings
+# ── Settings ──────────────────────────────────────────────────────────────────
 
 VIDEO_PATH = "2024-10-25_1848.mp4"
 MODEL_PATH = "best.pt"
@@ -32,13 +41,48 @@ PIXELS_PER_METER = DISH_DIAMETER_PIXELS / DISH_DIAMETER_METERS
 
 IDLE_SPEED_THRESHOLD = 0.01  # m/s
 
+UPLOAD_BATCH_SIZE = 100  # rows per Supabase insert
+
 COLORS = [(46, 204, 113), (52, 152, 219), (231, 76, 60),
            (241, 196, 15), (155, 89, 182)]
 
-# Create output directory
+# ── Supabase Setup ─────────────────────────────────────────────────────────────
+
+load_dotenv()
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("ERROR: SUPABASE_URL and SUPABASE_KEY not set in .env")
+    print("       Create a .env file with your Supabase credentials.")
+    exit(1)
+
+db: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+print(f"Connected to Supabase: {SUPABASE_URL}")
+
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Run YOLO tracking and save telemetry
+
+def ensure_bee_exists(db: Client, bee_ids: set):
+    """Insert bee IDs into the bees table (ignore duplicates)."""
+    rows = [{"bee_id": bid} for bid in bee_ids]
+    if rows:
+        db.table("bees").upsert(rows, on_conflict="bee_id").execute()
+
+
+def upload_batch(db: Client, rows: list):
+    """Upload a batch of telemetry rows to bee_frame_observation."""
+    if not rows:
+        return
+    try:
+        db.table("bee_frame_observation").insert(rows).execute()
+        print(f"    Uploaded {len(rows)} rows to Supabase")
+    except Exception as e:
+        print(f"    Supabase upload error: {e}")
+
+
+# ── YOLO Tracking ──────────────────────────────────────────────────────────────
 
 print("Running YOLO detection + BoT-SORT tracking...")
 
@@ -52,9 +96,11 @@ total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 writer = cv2.VideoWriter(str(OUTPUT_DIR / "tracked_video.mp4"),
                          cv2.VideoWriter_fourcc(*'mp4v'), FPS, (w, h))
 
-telemetry_rows = []
+telemetry_rows = []   # for local summary stats + plots
+upload_buffer = []    # for Supabase batching
 trails = {}
 prev_positions = {}
+seen_bee_ids = set()
 
 frame_num = 0
 while True:
@@ -63,27 +109,26 @@ while True:
         break
 
     results = model.track(frame, persist=True, verbose=False)
-
     vis_frame = frame.copy()
 
     for box in results[0].boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
-        conf = float(box.conf[0])
         center_x = (x1 + x2) / 2.0
         center_y = (y1 + y2) / 2.0
-
         track_id = int(box.id[0]) if box.id is not None else -1
 
+        # Speed calculation
         speed_mps = 0.0
         if track_id >= 0 and track_id in prev_positions:
             px, py = prev_positions[track_id]
             dist_pixels = np.sqrt((center_x - px)**2 + (center_y - py)**2)
-            dist_meters = dist_pixels / PIXELS_PER_METER
-            speed_mps = dist_meters / TIME_PER_FRAME
+            speed_mps = (dist_pixels / PIXELS_PER_METER) / TIME_PER_FRAME
 
         if track_id >= 0:
             prev_positions[track_id] = (center_x, center_y)
+            seen_bee_ids.add(track_id)
 
+        # Keep for local stats
         telemetry_rows.append({
             "frame": frame_num,
             "time_s": round(frame_num * TIME_PER_FRAME, 3),
@@ -93,6 +138,18 @@ while True:
             "speed_mps": round(speed_mps, 6)
         })
 
+        # Queue for Supabase upload
+        if track_id >= 0:
+            upload_buffer.append({
+                "bee_id": track_id,
+                "frame": frame_num,
+                "time_stamp": f"{round(frame_num * TIME_PER_FRAME, 3)}s",
+                "x_coord": round(center_x, 1),
+                "y_coord": round(center_y, 1),
+                "speed": round(speed_mps, 6),
+            })
+
+        # Trails
         if track_id >= 0:
             if track_id not in trails:
                 trails[track_id] = []
@@ -100,12 +157,14 @@ while True:
             if len(trails[track_id]) > 30:
                 trails[track_id] = trails[track_id][-30:]
 
+        # Draw bounding box
         color = COLORS[track_id % len(COLORS)] if track_id >= 0 else (0, 255, 0)
         cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
         label = f"Bee {track_id}" if track_id >= 0 else "?"
         cv2.putText(vis_frame, label, (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
+    # Draw trails
     for tid, trail in trails.items():
         color = COLORS[tid % len(COLORS)]
         for i in range(1, len(trail)):
@@ -120,6 +179,12 @@ while True:
 
     writer.write(vis_frame)
 
+    # Upload batch when buffer is full
+    if len(upload_buffer) >= UPLOAD_BATCH_SIZE:
+        ensure_bee_exists(db, seen_bee_ids)
+        upload_batch(db, upload_buffer)
+        upload_buffer = []
+
     if frame_num % 100 == 0:
         n_det = len(results[0].boxes)
         print(f"  Frame {frame_num}/{total_frames}: {n_det} bees detected")
@@ -129,16 +194,21 @@ while True:
 cap.release()
 writer.release()
 
-df = pd.DataFrame(telemetry_rows)
-df.to_csv(OUTPUT_DIR / "bee_telemetry.csv", index=False)
+# Flush remaining rows
+if upload_buffer:
+    ensure_bee_exists(db, seen_bee_ids)
+    upload_batch(db, upload_buffer)
+
 print(f"  Done — {frame_num} frames processed")
-print(f"  Saved: output/bee_telemetry.csv, output/tracked_video.mp4")
+print(f"  Saved: output/tracked_video.mp4")
+print(f"  Uploaded all telemetry to Supabase → bee_frame_observation")
 
 
-# Summary statistics
+# ── Summary Statistics ─────────────────────────────────────────────────────────
 
 print("\nGenerating summary statistics...")
 
+df = pd.DataFrame(telemetry_rows)
 df_tracked = df[df["bee_id"] >= 0].copy()
 
 bee_stats = df_tracked.groupby("bee_id")["speed_mps"].agg(
@@ -161,7 +231,7 @@ print(f"  Saved: output/bee_summary_statistics.xlsx")
 print(f"\n{bee_stats}\n")
 
 
-# Speed plot
+# ── Speed Plot ─────────────────────────────────────────────────────────────────
 
 print("Generating speed plot...")
 
