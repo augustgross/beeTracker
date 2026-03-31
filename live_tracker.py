@@ -55,6 +55,7 @@ import numpy as np
 import os
 import time
 import argparse
+import threading
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -76,7 +77,7 @@ PIXELS_PER_METER = DISH_DIAMETER_PIXELS / DISH_DIAMETER_METERS
 IDLE_SPEED_THRESHOLD = 0.01  # m/s
 
 # How many rows to batch before uploading to Supabase to reduce API calls
-UPLOAD_BATCH_SIZE = 100
+UPLOAD_BATCH_SIZE = 300
 
 COLORS = [(46, 204, 113), (52, 152, 219), (231, 76, 60),
            (241, 196, 15), (155, 89, 182)]
@@ -108,6 +109,72 @@ def upload_batch(rows):
     except Exception as e:
         print(f"  Supabase upload error: {e}")
 
+
+# MINUTE BATCH
+def update_minute_summary():
+    """Aggregate recent telemetry into bees_summary_per_minute."""
+    if db is None:
+        return
+
+    try:
+        db.rpc("execute_sql", {
+            "sql": """
+            INSERT INTO bees_summary_per_minute (
+                bee_id,
+                minute_bucket,
+                avg_speed,
+                mean_huddling,
+                avg_temp
+            )
+            SELECT
+                bee_id,
+                date_trunc('minute', time_stamp) AS minute_bucket,
+                AVG(speed) AS avg_speed,
+                NULL::double precision AS mean_huddling,
+                NULL::double precision AS avg_temp
+            FROM bee_frame_observation
+            WHERE time_stamp >= NOW() - INTERVAL '2 minutes'
+            GROUP BY bee_id, date_trunc('minute', time_stamp)
+            ON CONFLICT (bee_id, minute_bucket)
+            DO UPDATE SET
+                avg_speed = EXCLUDED.avg_speed,
+                mean_huddling = EXCLUDED.mean_huddling,
+                avg_temp = EXCLUDED.avg_temp;
+            """
+        }).execute()
+
+    except Exception as e:
+        print(f"Supabase upload error: {e}")
+
+#FOR DELETING OLD DATA (>HOUR OLD)
+def flush_old_bee_frames():
+    if db is None:
+        return
+
+    try:
+        db.rpc("execute_sql", {
+            "sql": """
+            DELETE FROM bee_frame_observation
+            WHERE time_stamp < NOW() - INTERVAL '2 hours';
+            """
+        }).execute()
+
+    except Exception as e:
+        print(f"Deletion error: {e}")
+
+#DELETION WORKER
+def flush_worker():
+    while True:
+        flush_old_bee_frames()
+        print(f"   Deletion success")
+        time.sleep(3600)  # run every hour
+
+#FOR MINUTE SUMMARY
+def summary_worker():
+    while True:
+        update_minute_summary()
+        print(f"  Minute summary created")
+        time.sleep(60)
 
 # Main Loop
 
@@ -158,6 +225,11 @@ def main():
     start_time = time.time()
 
     print("Tracking started... (press Ctrl+C to stop)\n")
+
+    #UPDATE MINUTE SUMMARY
+    threading.Thread(target=summary_worker, daemon=True).start()
+    #DELETE HOURLY
+    threading.Thread(target=flush_worker, daemon=True).start()
 
     try:
         while True:
