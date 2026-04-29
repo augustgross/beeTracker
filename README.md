@@ -19,7 +19,21 @@ This replaces the previous OpenCV threshold-based detection, which struggled wit
 | `tracked_video.mp4` | Annotated video with bounding boxes, IDs, and trails |
 | `speed_plot.png` | Speed over time graph for all bees |
 
-## Setup
+## New Setup
+
+Install UV https://docs.astral.sh/uv/
+
+```bash
+uv sync
+```
+
+## New Usage
+
+```bash
+uv run reduced_live_tracker.py --video test.mp4
+```
+
+## Old Setup
 
 Requires Python 3.9–3.12.
 
@@ -29,7 +43,7 @@ make setup
 
 This creates a virtual environment and installs all dependencies.
 
-## Usage
+## Old Usage
 
 Place your video and trained model in the project directory, then:
 

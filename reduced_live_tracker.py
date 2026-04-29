@@ -33,7 +33,7 @@ from supabase import create_client, Client
 
 # Config
 
-MODEL_PATH = "best_ncnn_model"              # NCNN export for performance
+MODEL_PATH = "model_ncnn_model"              # NCNN export for performance
 OUTPUT_DIR = Path("/mnt/storage/bee_data")  # external drive
 FALLBACK_DIR = Path("output")               # if external drive not mounted
 
