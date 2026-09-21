@@ -122,7 +122,6 @@ It runs, but slowly. These numbers are from one CPU core with the locked version
 
 Three things to know before trusting CPU output:
 
-- The scripts pass `half=True` unconditionally and Ultralytics does not switch FP16 off on the CPU, so CPU inference runs in FP16 at about half the speed of FP32. Changing the call to `half=(device == "cuda")` fixes that.
 - Below 1 FPS the speed column is wrong. When more than a second passes between frames the scripts treat it as a stall and substitute the nominal frame interval (1/20 s for a live stream) for the time step. That inflates speed by 20x or more.
 - At a few FPS the bees move a long way between frames, so IDs switch more often and speeds get noisy.
 
@@ -314,7 +313,6 @@ beeTracker/
 
 ## Known issues
 
-- `half=True` is passed on the CPU as well. See "Running without a GPU".
 - The time-step guard breaks speed values below 1 FPS. Same section.
 - `botsort.yaml` is never passed to `model.track()`, so tracking runs on the Ultralytics default BoT-SORT settings, which are quite different (`match_thresh` 0.8 instead of 0.99, `track_buffer` 30 instead of 60, `new_track_thresh` 0.25 instead of 0.8). Adding `tracker="botsort.yaml"` to the call uses the tuned file.
 - Timestamps come from `datetime.now().isoformat()`, which is local time with no UTC offset, and Supabase reads them as UTC. On a machine whose clock is not set to UTC the rows land hours off. West of UTC the two-minute summary window never sees them, so `bees_summary_per_minute` stays empty. More than two hours west (anywhere in the Americas), the cleanup also deletes them at its next hourly run. `datetime.now(timezone.utc).isoformat()` fixes it.
