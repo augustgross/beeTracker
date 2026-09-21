@@ -275,7 +275,7 @@ def main():
             # results = model.track(frame, persist=True, verbose=False,
             #                       imgsz=INFERENCE_IMGSZ)
             results = model.track(frame, persist=True, verbose=False,
-                      imgsz=INFERENCE_IMGSZ, device=device, half=True)
+                      imgsz=INFERENCE_IMGSZ, device=device, half=(device == "cuda"))
 
             vis_frame = frame.copy()
             now = datetime.now().isoformat()
